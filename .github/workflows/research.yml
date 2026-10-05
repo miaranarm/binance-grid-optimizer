@@ -1,6 +1,9 @@
 name: Grid Optimizer Research
 
 on:
+  push:
+    paths-ignore:
+      - "results/**"
   workflow_dispatch:
     inputs:
       days:
