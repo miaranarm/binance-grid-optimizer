@@ -30,12 +30,9 @@ def geometric_levels(lo, hi, n):
     return [lo * ((hi / lo) ** (i / n)) for i in range(n + 1)]
 
 def interval_minutes(interval):
-    if interval.endswith("m"):
-        return int(interval[:-1])
-    if interval.endswith("h"):
-        return int(interval[:-1]) * 60
-    if interval.endswith("d"):
-        return int(interval[:-1]) * 1440
+    if interval.endswith("m"): return int(interval[:-1])
+    if interval.endswith("h"): return int(interval[:-1]) * 60
+    if interval.endswith("d"): return int(interval[:-1]) * 1440
     raise ValueError(f"Unsupported interval for rolling MDD: {interval}")
 
 def simulate(df, cfg, path_mode="ohlc", interval="1m"):
@@ -45,30 +42,20 @@ def simulate(df, cfg, path_mode="ohlc", interval="1m"):
     slot_quote = investment / int(cfg["grids"])
     px0 = float(df.iloc[0].close)
 
-    k = 0
-    for i in range(len(levels) - 1):
-        if levels[i] <= px0 < levels[i + 1]:
-            k = i
-            break
-    else:
-        k = len(levels) - 2 if px0 >= levels[-1] else -1
+    k = next((i for i in range(len(levels) - 1) if levels[i] <= px0 < levels[i + 1]),
+             len(levels) - 2 if px0 >= levels[-1] else -1)
 
     cash, asset = investment, 0.0
     buy_orders, sell_orders = set(), set()
     if k >= 0:
-        inventory_value = 0.0
         for i in range(k + 1, len(levels)):
             p = levels[i]
             asset += slot_quote / p
-            inventory_value += slot_quote
-        cash = max(0.0, investment - inventory_value)
-        for i in range(0, k + 1):
-            buy_orders.add(i)
-        for i in range(k + 1, len(levels)):
-            sell_orders.add(i)
+        cash = max(0.0, investment - sum(slot_quote for _ in range(k + 1, len(levels))))
+        for i in range(0, k + 1): buy_orders.add(i)
+        for i in range(k + 1, len(levels)): sell_orders.add(i)
     else:
-        for i in range(len(levels) - 1):
-            buy_orders.add(i)
+        for i in range(len(levels) - 1): buy_orders.add(i)
 
     initial_equity = cash + asset * px0
     peak, mdd = initial_equity, 0.0
@@ -76,59 +63,42 @@ def simulate(df, cfg, path_mode="ohlc", interval="1m"):
     trades, fees = 0, 0.0
     stopped = False
 
-    sl = cfg.get("stop_loss")
-    tp = cfg.get("take_profit")
-    trailing = cfg.get("trailing_stop")
-    sl_pct = float(sl) if sl is not None else None
-    tp_pct = float(tp) if tp is not None else None
-    trail_pct = float(trailing) if trailing is not None else None
+    sl_pct = float(cfg["stop_loss"]) if cfg.get("stop_loss") is not None else None
+    tp_pct = float(cfg["take_profit"]) if cfg.get("take_profit") is not None else None
+    trail_pct = float(cfg["trailing_stop"]) if cfg.get("trailing_stop") is not None else None
     high_water = px0
 
     def execute_buy(idx):
         nonlocal cash, asset, trades, fees
-        p = levels[idx]
-        cost = slot_quote
-        fee_amt = cost * fee
+        p = levels[idx]; cost = slot_quote; fee_amt = cost * fee
         if idx in buy_orders and cash >= cost + fee_amt:
             asset += slot_quote / p
             cash -= cost + fee_amt
             buy_orders.remove(idx)
-            if idx + 1 < len(levels):
-                sell_orders.add(idx + 1)
-            trades += 1
-            fees += fee_amt
+            if idx + 1 < len(levels): sell_orders.add(idx + 1)
+            trades += 1; fees += fee_amt
 
     def execute_sell(idx):
         nonlocal cash, asset, trades, fees
-        p = levels[idx]
-        qty = slot_quote / p
+        p = levels[idx]; qty = slot_quote / p
         if idx in sell_orders and asset >= qty:
-            proceeds = qty * p
-            fee_amt = proceeds * fee
-            cash += proceeds - fee_amt
-            asset -= qty
+            proceeds = qty * p; fee_amt = proceeds * fee
+            cash += proceeds - fee_amt; asset -= qty
             sell_orders.remove(idx)
-            if idx - 1 >= 0:
-                buy_orders.add(idx - 1)
-            trades += 1
-            fees += fee_amt
+            if idx - 1 >= 0: buy_orders.add(idx - 1)
+            trades += 1; fees += fee_amt
 
     def process_price(prev, target):
-        if target == prev:
-            return
+        if target == prev: return
         lo, hi = sorted((prev, target))
         crossed = []
         for j, p in enumerate(levels):
-            if lo < p <= hi and target > prev:
-                crossed.append((p, j, "up"))
-            elif lo <= p < hi and target < prev:
-                crossed.append((p, j, "down"))
+            if lo < p <= hi and target > prev: crossed.append((p, j, "up"))
+            elif lo <= p < hi and target < prev: crossed.append((p, j, "down"))
         crossed.sort(reverse=(target < prev))
         for _, j, direction in crossed:
-            if direction == "up" and j in sell_orders:
-                execute_sell(j)
-            elif direction == "down" and j in buy_orders:
-                execute_buy(j)
+            if direction == "up" and j in sell_orders: execute_sell(j)
+            elif direction == "down" and j in buy_orders: execute_buy(j)
 
     for _, r in df.iterrows():
         o, h, l, c = map(float, (r.open, r.high, r.low, r.close))
@@ -137,10 +107,8 @@ def simulate(df, cfg, path_mode="ohlc", interval="1m"):
 
         if sl_pct is not None and l <= cfg["lower_price"] * (1 - sl_pct):
             emergency = cfg["lower_price"] * (1 - sl_pct)
-
         if tp_pct is not None and h >= px0 * (1 + tp_pct):
             emergency = px0 * (1 + tp_pct) if emergency is None else emergency
-
         if trail_pct is not None and prior_high_water > px0 * (1 + trail_pct):
             candidate = prior_high_water * (1 - trail_pct)
             if l <= candidate:
@@ -152,22 +120,21 @@ def simulate(df, cfg, path_mode="ohlc", interval="1m"):
             process_price(prev, target)
             prev = target
 
+        if not stopped and emergency is not None and (asset > 0 or cash > 0):
+            proceeds = asset * emergency * (1 - fee)
+            cash += proceeds
+            fees += asset * emergency * fee
+            asset = 0.0
+            buy_orders.clear(); sell_orders.clear()
+            trades += 1
+            stopped = True
+
         if stopped:
             eq = cash + asset * c
             equity_curve.append(eq)
             peak = max(peak, eq)
             mdd = max(mdd, (peak - eq) / peak if peak else 0.0)
             continue
-
-        if emergency is not None and (asset > 0 or cash > 0):
-            proceeds = asset * emergency * (1 - fee)
-            cash += proceeds
-            fees += asset * emergency * fee
-            asset = 0.0
-            buy_orders.clear()
-            sell_orders.clear()
-            trades += 1
-            stopped = True
 
         high_water = max(high_water, h)
         eq = cash + asset * c
@@ -184,20 +151,14 @@ def simulate(df, cfg, path_mode="ohlc", interval="1m"):
     roi = (final_eq / initial_equity - 1) * 100 if initial_equity else 0.0
 
     return {
-        "initial_equity": initial_equity,
-        "final_equity": final_eq,
-        "roi_pct": roi,
-        "pnl_usdt": final_eq - initial_equity,
-        "mdd_pct": mdd * 100,
-        "mdd7d_pct": mdd7d * 100,
-        "trades": trades,
-        "fees_usdt": fees,
-        "path_mode": path_mode,
+        "initial_equity": initial_equity, "final_equity": final_eq,
+        "roi_pct": roi, "pnl_usdt": final_eq - initial_equity,
+        "mdd_pct": mdd * 100, "mdd7d_pct": mdd7d * 100,
+        "trades": trades, "fees_usdt": fees, "path_mode": path_mode,
         "stopped": stopped,
         "data_start": pd.to_datetime(df.iloc[0].open_time, unit="ms", utc=True).isoformat(),
         "data_end": pd.to_datetime(df.iloc[-1].open_time, unit="ms", utc=True).isoformat(),
-        "start_close": px0,
-        "end_close": float(df.iloc[-1].close)
+        "start_close": px0, "end_close": float(df.iloc[-1].close)
     }
 
 def main():
@@ -218,19 +179,31 @@ def main():
         ("B2_SL_12pct", {"stop_loss": 0.12}),
         ("B3_trailing_3pct", {"trailing_stop": 0.03}),
         ("B4_trailing_5pct", {"trailing_stop": 0.05}),
+        ("T4_trailing_4pct", {"trailing_stop": 0.04}),
+        ("T45_trailing_4_5pct", {"trailing_stop": 0.045}),
+        ("T55_trailing_5_5pct", {"trailing_stop": 0.055}),
         ("T6_trailing_6pct", {"trailing_stop": 0.06}),
         ("T7_trailing_7pct", {"trailing_stop": 0.07}),
         ("T8_trailing_8pct", {"trailing_stop": 0.08}),
         ("T10_trailing_10pct", {"trailing_stop": 0.10}),
-        ("W1_range0145_0190_trail6", {"lower_price": 0.0145, "upper_price": 0.0190, "trailing_stop": 0.06}),
-        ("W2_range0145_0190_trail8", {"lower_price": 0.0145, "upper_price": 0.0190, "trailing_stop": 0.08}),
-        ("W3_range0140_0195_trail6", {"lower_price": 0.0140, "upper_price": 0.0195, "trailing_stop": 0.06}),
-        ("W4_range0140_0195_trail8", {"lower_price": 0.0140, "upper_price": 0.0195, "trailing_stop": 0.08}),
-        ("G1_20grids", {"grids": 20}),
-        ("G2_24grids", {"grids": 24}),
-        ("G3_32grids", {"grids": 32}),
-        ("C1_capital_30", {"min_investment_usdt": 30.0}),
-        ("C2_capital_45", {"min_investment_usdt": 45.0}),
+        ("W1_range0145_0190_trail3", {"lower_price": 0.0145, "upper_price": 0.0190, "trailing_stop": 0.03}),
+        ("W2_range0145_0190_trail4", {"lower_price": 0.0145, "upper_price": 0.0190, "trailing_stop": 0.04}),
+        ("W3_range0145_0190_trail5", {"lower_price": 0.0145, "upper_price": 0.0190, "trailing_stop": 0.05}),
+        ("W4_range0145_0190_trail6", {"lower_price": 0.0145, "upper_price": 0.0190, "trailing_stop": 0.06}),
+        ("X1_range0140_0195_trail3", {"lower_price": 0.0140, "upper_price": 0.0195, "trailing_stop": 0.03}),
+        ("X2_range0140_0195_trail4", {"lower_price": 0.0140, "upper_price": 0.0195, "trailing_stop": 0.04}),
+        ("X3_range0140_0195_trail5", {"lower_price": 0.0140, "upper_price": 0.0195, "trailing_stop": 0.05}),
+        ("X4_range0140_0195_trail6", {"lower_price": 0.0140, "upper_price": 0.0195, "trailing_stop": 0.06}),
+        ("G1_20grids_trail4", {"grids": 20, "trailing_stop": 0.04}),
+        ("G2_24grids_trail4", {"grids": 24, "trailing_stop": 0.04}),
+        ("G3_32grids_trail4", {"grids": 32, "trailing_stop": 0.04}),
+        ("G4_20grids_trail5", {"grids": 20, "trailing_stop": 0.05}),
+        ("G5_24grids_trail5", {"grids": 24, "trailing_stop": 0.05}),
+        ("G6_32grids_trail5", {"grids": 32, "trailing_stop": 0.05}),
+        ("C1_capital_30_trail4", {"min_investment_usdt": 30.0, "trailing_stop": 0.04}),
+        ("C2_capital_45_trail4", {"min_investment_usdt": 45.0, "trailing_stop": 0.04}),
+        ("C3_capital_30_trail5", {"min_investment_usdt": 30.0, "trailing_stop": 0.05}),
+        ("C4_capital_45_trail5", {"min_investment_usdt": 45.0, "trailing_stop": 0.05}),
     ]
 
     rows = []
