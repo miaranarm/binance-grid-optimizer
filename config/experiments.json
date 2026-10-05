@@ -1,0 +1,33 @@
+{
+  "version": "1.0",
+  "baseline": "baseline_9161957.json",
+  "experiments": [
+    {
+      "id": "B0",
+      "name": "baseline",
+      "changes": {}
+    },
+    {
+      "id": "B1",
+      "name": "wide_catastrophe_sl",
+      "changes": {
+        "stop_loss": "to_be_defined_after_baseline_validation"
+      }
+    },
+    {
+      "id": "B2",
+      "name": "trailing_stop",
+      "changes": {
+        "trailing_stop": "to_be_defined_after_baseline_validation"
+      }
+    },
+    {
+      "id": "B3",
+      "name": "wide_sl_plus_trailing",
+      "changes": {
+        "stop_loss": "to_be_defined_after_baseline_validation",
+        "trailing_stop": "to_be_defined_after_baseline_validation"
+      }
+    }
+  ]
+}
