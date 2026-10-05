@@ -2,6 +2,15 @@ name: Grid Optimizer Research
 
 on:
   workflow_dispatch:
+    inputs:
+      days:
+        description: "Historical days"
+        required: false
+        default: "270"
+      interval:
+        description: "Binance candle interval"
+        required: false
+        default: "5m"
 
 permissions:
   contents: write
@@ -9,27 +18,22 @@ permissions:
 jobs:
   research:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
+      - name: Install dependencies
+        run: pip install pandas requests
       - name: Validate configuration
+        run: python -m json.tool config/baseline_9161957.json >/dev/null && python -m json.tool config/experiments.json >/dev/null
+      - name: Run baseline and controlled variants
+        run: python research/grid_backtest.py --days ${{ inputs.days }} --interval ${{ inputs.interval }}
+      - name: Publish results
         run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          for p in ["config/baseline_9161957.json", "config/experiments.json"]:
-              json.loads(Path(p).read_text())
-              print(f"OK: {p}")
-          PY
-
-      - name: Show research plan
-        run: |
-          echo "Baseline: bot 9161957"
-          echo "Research mode: controlled parameter experiments"
-          echo "Live trading: DISABLED"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add results/baseline_and_variants.csv
+          git diff --cached --quiet || git commit -m "results: baseline and controlled grid variants"
+          git push
