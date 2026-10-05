@@ -32,7 +32,9 @@ jobs:
       - name: Validate configuration
         run: python -m json.tool config/baseline_9161957.json >/dev/null && python -m json.tool config/experiments.json >/dev/null
       - name: Run baseline and controlled variants
-        run: python research/grid_backtest.py --days "${{ inputs.days || '270' }}" --interval "${{ inputs.interval || '5m' }}"
+        run: |
+          sed -i "s#https://api.binance.com/api/v3/klines#https://data-api.binance.vision/api/v3/klines#" research/grid_backtest.py
+          python research/grid_backtest.py --days "${{ inputs.days || '270' }}" --interval "${{ inputs.interval || '5m' }}"
       - name: Publish results
         run: |
           git config user.name "github-actions[bot]"
