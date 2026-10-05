@@ -57,8 +57,8 @@ def simulate(df, cfg, path_mode="ohlc", interval="1m"):
     buy_idx = list(range(0, k + 1))
     sell_idx = list(range(k + 1, n + 1))
 
-    buy_notional_factor = sum(levels[i] * (1.0 + fee) for i in buy_idx)
-    sell_notional_factor = sum(px0 * (1.0 + fee) for _ in sell_idx)
+    buy_notional_factor = sum(levels[i] for i in buy_idx)
+    sell_notional_factor = sum(px0 for _ in sell_idx)
     denom = buy_notional_factor + sell_notional_factor
     qty = investment / denom if denom > 0 else 0.0
 
