@@ -19,15 +19,26 @@ def fetch_klines(symbol, interval, start_ms, end_ms):
         if nxt <= cur: break
         cur = nxt
         time.sleep(0.05)
-    if not rows: raise RuntimeError(f"No Binance candles for {symbol} {interval}")
+    if not rows:
+        raise RuntimeError(f"No Binance candles for {symbol} {interval}")
     df = pd.DataFrame(rows, columns=["open_time","open","high","low","close","volume","close_time","qav","trades","taker_base","taker_quote","ignore"])
-    for c in ["open","high","low","close","volume"]: df[c] = pd.to_numeric(df[c], errors="coerce")
+    for c in ["open","high","low","close","volume"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
     return df.drop_duplicates("open_time").sort_values("open_time").reset_index(drop=True)
 
 def geometric_levels(lo, hi, n):
     return [lo * ((hi / lo) ** (i / n)) for i in range(n + 1)]
 
-def simulate(df, cfg, path_mode="ohlc"):
+def interval_minutes(interval):
+    if interval.endswith("m"):
+        return int(interval[:-1])
+    if interval.endswith("h"):
+        return int(interval[:-1]) * 60
+    if interval.endswith("d"):
+        return int(interval[:-1]) * 1440
+    raise ValueError(f"Unsupported interval for rolling MDD: {interval}")
+
+def simulate(df, cfg, path_mode="ohlc", interval="1m"):
     levels = geometric_levels(float(cfg["lower_price"]), float(cfg["upper_price"]), int(cfg["grids"]))
     investment = float(cfg["min_investment_usdt"])
     fee = float(cfg.get("fee_rate", 0.001))
@@ -37,7 +48,8 @@ def simulate(df, cfg, path_mode="ohlc"):
     k = 0
     for i in range(len(levels) - 1):
         if levels[i] <= px0 < levels[i + 1]:
-            k = i; break
+            k = i
+            break
     else:
         k = len(levels) - 2 if px0 >= levels[-1] else -1
 
@@ -46,12 +58,17 @@ def simulate(df, cfg, path_mode="ohlc"):
     if k >= 0:
         inventory_value = 0.0
         for i in range(k + 1, len(levels)):
-            p = levels[i]; asset += slot_quote / p; inventory_value += slot_quote
+            p = levels[i]
+            asset += slot_quote / p
+            inventory_value += slot_quote
         cash = max(0.0, investment - inventory_value)
-        for i in range(0, k + 1): buy_orders.add(i)
-        for i in range(k + 1, len(levels)): sell_orders.add(i)
+        for i in range(0, k + 1):
+            buy_orders.add(i)
+        for i in range(k + 1, len(levels)):
+            sell_orders.add(i)
     else:
-        for i in range(len(levels) - 1): buy_orders.add(i)
+        for i in range(len(levels) - 1):
+            buy_orders.add(i)
 
     initial_equity = cash + asset * px0
     peak, mdd = initial_equity, 0.0
@@ -59,125 +76,175 @@ def simulate(df, cfg, path_mode="ohlc"):
     trades, fees = 0, 0.0
     stopped = False
 
-    sl = cfg.get("stop_loss"); tp = cfg.get("take_profit"); trailing = cfg.get("trailing_stop")
+    sl = cfg.get("stop_loss")
+    tp = cfg.get("take_profit")
+    trailing = cfg.get("trailing_stop")
     sl_pct = float(sl) if sl is not None else None
     tp_pct = float(tp) if tp is not None else None
     trail_pct = float(trailing) if trailing is not None else None
     high_water = px0
-    trail_active = False
 
     def execute_buy(idx):
         nonlocal cash, asset, trades, fees
-        p = levels[idx]; cost = slot_quote; fee_amt = cost * fee
+        p = levels[idx]
+        cost = slot_quote
+        fee_amt = cost * fee
         if idx in buy_orders and cash >= cost + fee_amt:
-            asset += slot_quote / p; cash -= cost + fee_amt
+            asset += slot_quote / p
+            cash -= cost + fee_amt
             buy_orders.remove(idx)
-            if idx + 1 < len(levels): sell_orders.add(idx + 1)
-            trades += 1; fees += fee_amt; return True
-        return False
+            if idx + 1 < len(levels):
+                sell_orders.add(idx + 1)
+            trades += 1
+            fees += fee_amt
 
     def execute_sell(idx):
         nonlocal cash, asset, trades, fees
-        p = levels[idx]; qty = slot_quote / p
+        p = levels[idx]
+        qty = slot_quote / p
         if idx in sell_orders and asset >= qty:
-            proceeds = qty * p; fee_amt = proceeds * fee
-            cash += proceeds - fee_amt; asset -= qty
+            proceeds = qty * p
+            fee_amt = proceeds * fee
+            cash += proceeds - fee_amt
+            asset -= qty
             sell_orders.remove(idx)
-            if idx - 1 >= 0: buy_orders.add(idx - 1)
-            trades += 1; fees += fee_amt; return True
-        return False
+            if idx - 1 >= 0:
+                buy_orders.add(idx - 1)
+            trades += 1
+            fees += fee_amt
 
     def process_price(prev, target):
-        if target == prev: return
-        lo, hi = sorted((prev, target)); crossed = []
+        if target == prev:
+            return
+        lo, hi = sorted((prev, target))
+        crossed = []
         for j, p in enumerate(levels):
-            if lo < p <= hi and target > prev: crossed.append((p, j, "up"))
-            elif lo <= p < hi and target < prev: crossed.append((p, j, "down"))
+            if lo < p <= hi and target > prev:
+                crossed.append((p, j, "up"))
+            elif lo <= p < hi and target < prev:
+                crossed.append((p, j, "down"))
         crossed.sort(reverse=(target < prev))
         for _, j, direction in crossed:
-            if direction == "up" and j in sell_orders: execute_sell(j)
-            elif direction == "down" and j in buy_orders: execute_buy(j)
+            if direction == "up" and j in sell_orders:
+                execute_sell(j)
+            elif direction == "down" and j in buy_orders:
+                execute_buy(j)
 
     for _, r in df.iterrows():
         o, h, l, c = map(float, (r.open, r.high, r.low, r.close))
-        # Evaluate trailing stop from the PRIOR high-water mark.
-        # The current candle high updates the reference only after the stop check.
         prior_high_water = high_water
         emergency = None
+
         if sl_pct is not None and l <= cfg["lower_price"] * (1 - sl_pct):
             emergency = cfg["lower_price"] * (1 - sl_pct)
+
         if tp_pct is not None and h >= px0 * (1 + tp_pct):
             emergency = px0 * (1 + tp_pct) if emergency is None else emergency
+
         if trail_pct is not None and prior_high_water > px0 * (1 + trail_pct):
-            trail_active = True
             candidate = prior_high_water * (1 - trail_pct)
-            if l <= candidate: emergency = candidate if emergency is None else min(emergency, candidate)
+            if l <= candidate:
+                emergency = candidate if emergency is None else min(emergency, candidate)
 
         path = [o, h, l, c] if path_mode == "ohlc" else [o, l, h, c]
         prev = path[0]
         for target in path[1:]:
-            process_price(prev, target); prev = target
+            process_price(prev, target)
+            prev = target
 
         if stopped:
             eq = cash + asset * c
             equity_curve.append(eq)
-            peak = max(peak, eq); mdd = max(mdd, (peak - eq) / peak if peak else 0.0)
+            peak = max(peak, eq)
+            mdd = max(mdd, (peak - eq) / peak if peak else 0.0)
             continue
 
         if emergency is not None and (asset > 0 or cash > 0):
             proceeds = asset * emergency * (1 - fee)
-            cash += proceeds; fees += asset * emergency * fee; asset = 0.0
-            buy_orders.clear(); sell_orders.clear(); trades += 1; stopped = True
+            cash += proceeds
+            fees += asset * emergency * fee
+            asset = 0.0
+            buy_orders.clear()
+            sell_orders.clear()
+            trades += 1
+            stopped = True
 
         high_water = max(high_water, h)
         eq = cash + asset * c
         equity_curve.append(eq)
-        peak = max(peak, eq); mdd = max(mdd, (peak - eq) / peak if peak else 0.0)
+        peak = max(peak, eq)
+        mdd = max(mdd, (peak - eq) / peak if peak else 0.0)
 
     final_eq = cash + asset * float(df.iloc[-1].close)
-    bars_7d = max(1, int(round(7 * 24 * 60 / 5)))
+    bars_7d = max(1, int(round(7 * 24 * 60 / interval_minutes(interval))))
     eqs = pd.Series(equity_curve, dtype="float64")
     rolling_peak_7d = eqs.rolling(bars_7d, min_periods=1).max()
     rolling_dd_7d = ((rolling_peak_7d - eqs) / rolling_peak_7d).fillna(0.0)
     mdd7d = float(rolling_dd_7d.max()) if len(rolling_dd_7d) else 0.0
     roi = (final_eq / initial_equity - 1) * 100 if initial_equity else 0.0
-    return {"initial_equity": initial_equity, "final_equity": final_eq, "roi_pct": roi,
-            "pnl_usdt": final_eq - initial_equity, "mdd_pct": mdd * 100,
-            "mdd7d_pct": mdd7d * 100, "trades": trades, "fees_usdt": fees,
-            "path_mode": path_mode, "stopped": stopped,
-            "data_start": pd.to_datetime(df.iloc[0].open_time, unit="ms", utc=True).isoformat(),
-            "data_end": pd.to_datetime(df.iloc[-1].open_time, unit="ms", utc=True).isoformat(),
-            "start_close": px0, "end_close": float(df.iloc[-1].close)}
+
+    return {
+        "initial_equity": initial_equity,
+        "final_equity": final_eq,
+        "roi_pct": roi,
+        "pnl_usdt": final_eq - initial_equity,
+        "mdd_pct": mdd * 100,
+        "mdd7d_pct": mdd7d * 100,
+        "trades": trades,
+        "fees_usdt": fees,
+        "path_mode": path_mode,
+        "stopped": stopped,
+        "data_start": pd.to_datetime(df.iloc[0].open_time, unit="ms", utc=True).isoformat(),
+        "data_end": pd.to_datetime(df.iloc[-1].open_time, unit="ms", utc=True).isoformat(),
+        "start_close": px0,
+        "end_close": float(df.iloc[-1].close)
+    }
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--days", type=int, default=270); ap.add_argument("--interval", default="5m")
-    ap.add_argument("--output", default="results/baseline_and_variants.csv"); args = ap.parse_args()
+    ap.add_argument("--days", type=int, default=270)
+    ap.add_argument("--interval", default="1m")
+    ap.add_argument("--output", default="results/baseline_and_variants.csv")
+    args = ap.parse_args()
+
     cfg = json.loads(Path("config/baseline_9161957.json").read_text())
-    end = int(time.time() * 1000); start = end - args.days * 86400000
+    end = int(time.time() * 1000)
+    start = end - args.days * 86400000
     df = fetch_klines(cfg["market"].replace("/", ""), args.interval, start, end)
+
     variants = [
         ("B0_baseline", {}),
         ("B1_SL_8pct", {"stop_loss": 0.08}),
         ("B2_SL_12pct", {"stop_loss": 0.12}),
         ("B3_trailing_3pct", {"trailing_stop": 0.03}),
         ("B4_trailing_5pct", {"trailing_stop": 0.05}),
-        ("B5_SL8_trailing3", {"stop_loss": 0.08, "trailing_stop": 0.03}),
-        # Conservative structural tests: widen the range without changing capital.
-        ("R1_wide_0145_0190", {"lower_price": 0.0145, "upper_price": 0.0190}),
-        ("R2_wide_0140_0195", {"lower_price": 0.0140, "upper_price": 0.0195}),
+        ("T6_trailing_6pct", {"trailing_stop": 0.06}),
+        ("T7_trailing_7pct", {"trailing_stop": 0.07}),
+        ("T8_trailing_8pct", {"trailing_stop": 0.08}),
+        ("T10_trailing_10pct", {"trailing_stop": 0.10}),
+        ("W1_range0145_0190_trail6", {"lower_price": 0.0145, "upper_price": 0.0190, "trailing_stop": 0.06}),
+        ("W2_range0145_0190_trail8", {"lower_price": 0.0145, "upper_price": 0.0190, "trailing_stop": 0.08}),
+        ("W3_range0140_0195_trail6", {"lower_price": 0.0140, "upper_price": 0.0195, "trailing_stop": 0.06}),
+        ("W4_range0140_0195_trail8", {"lower_price": 0.0140, "upper_price": 0.0195, "trailing_stop": 0.08}),
         ("G1_20grids", {"grids": 20}),
         ("G2_24grids", {"grids": 24}),
         ("G3_32grids", {"grids": 32}),
         ("C1_capital_30", {"min_investment_usdt": 30.0}),
         ("C2_capital_45", {"min_investment_usdt": 45.0}),
     ]
+
     rows = []
     for name, changes in variants:
         c = {**cfg, **changes}
         for path_mode in ("ohlc", "olhc"):
-            x = simulate(df, c, path_mode); x.update({"experiment": name, "days": args.days, "interval": args.interval}); rows.append(x)
-    out = pd.DataFrame(rows); Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-    out.to_csv(args.output, index=False); print(out.to_string(index=False))
+            x = simulate(df, c, path_mode, args.interval)
+            x.update({"experiment": name, "days": args.days, "interval": args.interval})
+            rows.append(x)
 
-if __name__ == "__main__": main()
+    out = pd.DataFrame(rows)
+    Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+    out.to_csv(args.output, index=False)
+    print(out.to_string(index=False))
+
+if __name__ == "__main__":
+    main()
