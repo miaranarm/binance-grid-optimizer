@@ -63,12 +63,19 @@ def simulate(df, cfg, path_mode="ohlc"):
     sell_orders = set()
 
     if k >= 0:
-        for i in range(0, k + 1):
-            buy_orders.add(i)
+        # Conserve the initial investment: inventory above market is funded
+        # from the same capital, with the remainder reserved for lower buys.
+        inventory_value = 0.0
         for i in range(k + 1, len(levels)):
             p = levels[i]
             qty = slot_quote / p
             asset += qty
+            inventory_value += slot_quote
+        cash = max(0.0, investment - inventory_value)
+        for i in range(0, k + 1):
+            buy_orders.add(i)
+        for i in range(k + 1, len(levels)):
+            sell_orders.add(i)
     else:
         # Price below range: all grid inventory must be acquired only as price rises.
         for i in range(len(levels) - 1):
@@ -169,6 +176,12 @@ def simulate(df, cfg, path_mode="ohlc"):
             process_price(prev, target)
             prev = target
 
+        if stopped:
+            eq = cash + asset * c
+            peak = max(peak, eq)
+            mdd = max(mdd, (peak - eq) / peak if peak else 0.0)
+            continue
+
         if emergency is not None and (asset > 0 or cash > 0):
             proceeds = asset * emergency * (1 - fee)
             cash += proceeds
@@ -182,10 +195,6 @@ def simulate(df, cfg, path_mode="ohlc"):
         eq = cash + asset * c
         peak = max(peak, eq)
         mdd = max(mdd, (peak - eq) / peak if peak else 0.0)
-        if stopped:
-            # No re-entry after a portfolio emergency exit.
-            pass
-
     final_eq = cash + asset * float(df.iloc[-1].close)
     roi = (final_eq / initial_equity - 1) * 100 if initial_equity else 0.0
     return {
