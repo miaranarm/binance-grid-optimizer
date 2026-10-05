@@ -1,0 +1,16 @@
+{
+  "bot_id": "9161957",
+  "role": "baseline_control",
+  "market": "TST/USDT",
+  "strategy": "spot_grid",
+  "grid_type": "geometric",
+  "grids": 16,
+  "lower_price": 0.015,
+  "upper_price": 0.018,
+  "trailing_up": false,
+  "stop_loss": null,
+  "take_profit": null,
+  "trailing_stop": null,
+  "min_investment_usdt": 21.7,
+  "notes": "Reference configuration. Do not optimize or overwrite this file."
+}
