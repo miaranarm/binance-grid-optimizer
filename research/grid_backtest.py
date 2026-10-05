@@ -64,6 +64,7 @@ def simulate(df, cfg, path_mode="ohlc"):
     tp_pct = float(tp) if tp is not None else None
     trail_pct = float(trailing) if trailing is not None else None
     high_water = px0
+    trail_active = False
 
     def execute_buy(idx):
         nonlocal cash, asset, trades, fees
@@ -99,14 +100,17 @@ def simulate(df, cfg, path_mode="ohlc"):
 
     for _, r in df.iterrows():
         o, h, l, c = map(float, (r.open, r.high, r.low, r.close))
-        high_water = max(high_water, h)
+        # Evaluate trailing stop from the PRIOR high-water mark.
+        # The current candle high updates the reference only after the stop check.
+        prior_high_water = high_water
         emergency = None
         if sl_pct is not None and l <= cfg["lower_price"] * (1 - sl_pct):
             emergency = cfg["lower_price"] * (1 - sl_pct)
         if tp_pct is not None and h >= px0 * (1 + tp_pct):
             emergency = px0 * (1 + tp_pct) if emergency is None else emergency
-        if trail_pct is not None and high_water > cfg["lower_price"]:
-            candidate = high_water * (1 - trail_pct)
+        if trail_pct is not None and prior_high_water > px0 * (1 + trail_pct):
+            trail_active = True
+            candidate = prior_high_water * (1 - trail_pct)
             if l <= candidate: emergency = candidate if emergency is None else min(emergency, candidate)
 
         path = [o, h, l, c] if path_mode == "ohlc" else [o, l, h, c]
@@ -125,6 +129,7 @@ def simulate(df, cfg, path_mode="ohlc"):
             cash += proceeds; fees += asset * emergency * fee; asset = 0.0
             buy_orders.clear(); sell_orders.clear(); trades += 1; stopped = True
 
+        high_water = max(high_water, h)
         eq = cash + asset * c
         equity_curve.append(eq)
         peak = max(peak, eq); mdd = max(mdd, (peak - eq) / peak if peak else 0.0)
