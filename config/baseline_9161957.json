@@ -11,6 +11,18 @@
   "stop_loss": null,
   "take_profit": null,
   "trailing_stop": null,
-  "min_investment_usdt": 21.7,
-  "notes": "Reference configuration. Do not optimize or overwrite this file."
+  "min_investment_usdt": 21.69681,
+  "binance_observed": {
+    "roi_pct": 130.18,
+    "pnl_usdt": 27.33854669,
+    "matched_trades": 2486,
+    "mdd_7d_pct": 1.33,
+    "running_time_days_approx": 270,
+    "implied_binance_investment_usdt": 21.00057358
+  },
+  "source": {
+    "file": "current_multicriteria.csv",
+    "fields": ["strategyId", "symbol", "strategyType", "minInvestment", "runningTime", "roi", "pnl", "matchedTrades", "mdd7d"]
+  },
+  "notes": "Reference configuration. Do not optimize or overwrite this file. Observed Binance metrics are retained as audit targets; reconstructed backtests must not claim exact Binance ROI unless execution-level data reproduces Binance accounting."
 }
