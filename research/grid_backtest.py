@@ -156,9 +156,22 @@ def main():
     cfg = json.loads(Path("config/baseline_9161957.json").read_text())
     end = int(time.time() * 1000); start = end - args.days * 86400000
     df = fetch_klines(cfg["market"].replace("/", ""), args.interval, start, end)
-    variants = [("B0_baseline", {}), ("B1_SL_8pct", {"stop_loss": 0.08}), ("B2_SL_12pct", {"stop_loss": 0.12}),
-                ("B3_trailing_3pct", {"trailing_stop": 0.03}), ("B4_trailing_5pct", {"trailing_stop": 0.05}),
-                ("B5_SL8_trailing3", {"stop_loss": 0.08, "trailing_stop": 0.03})]
+    variants = [
+        ("B0_baseline", {}),
+        ("B1_SL_8pct", {"stop_loss": 0.08}),
+        ("B2_SL_12pct", {"stop_loss": 0.12}),
+        ("B3_trailing_3pct", {"trailing_stop": 0.03}),
+        ("B4_trailing_5pct", {"trailing_stop": 0.05}),
+        ("B5_SL8_trailing3", {"stop_loss": 0.08, "trailing_stop": 0.03}),
+        # Conservative structural tests: widen the range without changing capital.
+        ("R1_wide_0145_0190", {"lower_price": 0.0145, "upper_price": 0.0190}),
+        ("R2_wide_0140_0195", {"lower_price": 0.0140, "upper_price": 0.0195}),
+        ("G1_20grids", {"grids": 20}),
+        ("G2_24grids", {"grids": 24}),
+        ("G3_32grids", {"grids": 32}),
+        ("C1_capital_30", {"min_investment_usdt": 30.0}),
+        ("C2_capital_45", {"min_investment_usdt": 45.0}),
+    ]
     rows = []
     for name, changes in variants:
         c = {**cfg, **changes}
