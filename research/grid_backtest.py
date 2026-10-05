@@ -34,108 +34,160 @@ def interval_minutes(interval):
     raise ValueError(f"Unsupported interval: {interval}")
 
 def simulate(df, cfg, path_mode="ohlc", interval="1m"):
-    """Binance-style audit reconstruction; exact UI accounting requires Binance execution ledger."""
+    """Binance Spot Grid accounting reconstruction.
+
+    Key rules mirrored from Binance documentation:
+    - ROI = Total Profit / Total Investment.
+    - Total Profit = Grid Profit + Floating/Unrealized PnL.
+    - Grid Profit is earned only by a matched buy at a lower grid and sell at
+      the immediately higher grid.
+    - Initial sell-side inventory is NOT treated as matched profit.
+    - Qty Per Order is derived from the investment and the assets reserved by
+      the initial open buy/sell orders plus trading-fee reserves.
+    """
     levels = geometric_levels(float(cfg["lower_price"]), float(cfg["upper_price"]), int(cfg["grids"]))
     investment = float(cfg["min_investment_usdt"])
     fee = float(cfg.get("fee_rate", 0.001))
     n = int(cfg["grids"])
     px0 = float(df.iloc[0].close)
 
-    # Fixed Binance-style denominator: ROI is total PNL / configured investment.
-    slot_quote = investment / n
+    # At creation Binance places buy orders below the current price and sell
+    # orders above it. Solve Qty Per Order from the investment amount.
     k = next((i for i in range(n) if levels[i] <= px0 < levels[i + 1]), n - 1)
-    initial_base = sum(slot_quote / levels[i] for i in range(k + 1, n + 1))
-    initial_quote = max(0.0, investment - slot_quote * len(range(k + 1, n + 1)))
-    initial_equity = initial_quote + initial_base * px0
+    buy_idx = list(range(0, k + 1))
+    sell_idx = list(range(k + 1, n + 1))
 
-    cash, asset = initial_quote, initial_base
-    buy_orders, sell_orders = set(range(0, k + 1)), set(range(k + 1, n + 1))
-    lots = [{"qty": initial_base, "unit_cost": px0}] if initial_base > 0 else []
+    buy_notional_factor = sum(levels[i] * (1.0 + fee) for i in buy_idx)
+    sell_notional_factor = sum(px0 * (1.0 + fee) for _ in sell_idx)
+    denom = buy_notional_factor + sell_notional_factor
+    qty = investment / denom if denom > 0 else 0.0
 
-    realized_grid_profit = fees = 0.0
+    # Open orders represented by counts; each fill creates the opposite order
+    # one grid away. A filled buy becomes matchable with a sell one level up.
+    open_buys = set(buy_idx)
+    open_sells = set(sell_idx)
+    pending_buys = {i: 0 for i in range(n)}
+    pending_sells = {i: 0 for i in range(1, n + 1)}
+
+    grid_profit = 0.0
+    fees = 0.0
     trades = 0
+    matched = 0
     stopped = False
     stop_price = None
     high_water = px0
-    equity_curve = []
+    profit_curve = []
 
     sl_pct = float(cfg["stop_loss"]) if cfg.get("stop_loss") is not None else None
     tp_pct = float(cfg["take_profit"]) if cfg.get("take_profit") is not None else None
     trail_pct = float(cfg["trailing_stop"]) if cfg.get("trailing_stop") is not None else None
 
     def buy(idx):
-        nonlocal cash, asset, fees, trades
-        p = levels[idx]; quote = slot_quote; fee_amt = quote * fee
-        if idx not in buy_orders or cash < quote + fee_amt: return
-        qty = quote / p
-        cash -= quote + fee_amt; asset += qty; fees += fee_amt
-        lots.append({"qty": qty, "unit_cost": p * (1 + fee)})
-        buy_orders.remove(idx)
-        if idx + 1 <= n: sell_orders.add(idx + 1)
+        nonlocal fees, trades
+        if idx not in open_buys:
+            return
+        p = levels[idx]
+        fee_amt = qty * p * fee
+        fees += fee_amt
+        open_buys.remove(idx)
+        pending_buys[idx] = pending_buys.get(idx, 0) + 1
+        # After a buy, the next upper grid becomes the sell order.
+        if idx + 1 <= n:
+            open_sells.add(idx + 1)
         trades += 1
 
     def sell(idx):
-        nonlocal cash, asset, fees, trades, realized_grid_profit
-        p = levels[idx]; qty = slot_quote / p
-        if idx not in sell_orders or asset + 1e-15 < qty: return
-        proceeds = qty * p; fee_amt = proceeds * fee
-        remaining, cost = qty, 0.0
-        while remaining > 1e-15 and lots:
-            lot = lots[0]; take = min(remaining, lot["qty"])
-            cost += take * lot["unit_cost"]; lot["qty"] -= take; remaining -= take
-            if lot["qty"] <= 1e-15: lots.pop(0)
-        realized_grid_profit += proceeds - fee_amt - cost
-        cash += proceeds - fee_amt; asset -= qty; fees += fee_amt
-        sell_orders.remove(idx)
-        if idx - 1 >= 0: buy_orders.add(idx - 1)
+        nonlocal fees, trades, grid_profit, matched
+        if idx not in open_sells:
+            return
+        p = levels[idx]
+        fee_amt = qty * p * fee
+        fees += fee_amt
+
+        # Only a lower-grid buy that was actually filled can form a matched
+        # order. Initial sell inventory therefore remains unmatched.
+        lower = idx - 1
+        if lower >= 0 and pending_buys.get(lower, 0) > 0:
+            buy_p = levels[lower]
+            buy_fee = qty * buy_p * fee
+            # Binance converts a base-asset buy fee to quote asset using the
+            # current/stop price. During a running bot the matching sell price
+            # is the relevant quote conversion proxy.
+            grid_profit += qty * p - qty * buy_p - fee_amt - buy_fee
+            pending_buys[lower] -= 1
+            matched += 1
+
+        open_sells.remove(idx)
+        if idx - 1 >= 0:
+            open_buys.add(idx - 1)
         trades += 1
 
     def process(prev, target):
-        if target == prev: return
-        lo, hi = sorted((prev, target)); crossed = []
+        if target == prev:
+            return
+        lo, hi = sorted((prev, target))
+        crossed = []
         for j, p in enumerate(levels):
-            if target > prev and lo < p <= hi: crossed.append((p, j, "up"))
-            elif target < prev and lo <= p < hi: crossed.append((p, j, "down"))
+            if target > prev and lo < p <= hi:
+                crossed.append((p, j, "up"))
+            elif target < prev and lo <= p < hi:
+                crossed.append((p, j, "down"))
         crossed.sort(reverse=(target < prev))
         for _, j, direction in crossed:
             sell(j) if direction == "up" else buy(j)
+
+    def floating_pnl(last_price):
+        # Binance's documented floating-PnL representation:
+        # open buys + open sells + reserved fee balances - investment.
+        open_buy_quote = sum(levels[i] * qty for i in open_buys)
+        open_sell_value = sum(qty * last_price for _ in open_sells)
+        reserved_quote_fees = sum(levels[i] * qty * fee for i in open_buys)
+        reserved_base_fee_value = sum(qty * fee * last_price for _ in open_sells)
+        return open_buy_quote + open_sell_value + reserved_quote_fees + reserved_base_fee_value - investment
 
     for _, r in df.iterrows():
         o, h, l, c = map(float, (r.open, r.high, r.low, r.close))
         prior_high = high_water
         emergency = None
+
         if sl_pct is not None and l <= float(cfg["lower_price"]) * (1 - sl_pct):
             emergency = float(cfg["lower_price"]) * (1 - sl_pct)
         if tp_pct is not None and h >= px0 * (1 + tp_pct):
             emergency = px0 * (1 + tp_pct) if emergency is None else emergency
         if trail_pct is not None and prior_high > px0 * (1 + trail_pct):
             candidate = prior_high * (1 - trail_pct)
-            if l <= candidate: emergency = candidate if emergency is None else min(emergency, candidate)
+            if l <= candidate:
+                emergency = candidate if emergency is None else min(emergency, candidate)
 
         path = [o, h, l, c] if path_mode == "ohlc" else [o, l, h, c]
         prev = path[0]
         for target in path[1:]:
-            if not stopped: process(prev, target)
+            if not stopped:
+                process(prev, target)
             prev = target
 
-        if not stopped and emergency is not None and asset > 0:
-            proceeds = asset * emergency; fee_amt = proceeds * fee
-            cost = sum(x["qty"] * x["unit_cost"] for x in lots)
-            realized_grid_profit += proceeds - fee_amt - cost
-            fees += fee_amt; cash += proceeds - fee_amt; asset = 0.0; lots.clear()
-            buy_orders.clear(); sell_orders.clear()
-            stopped = True; stop_price = emergency; trades += 1
+        if not stopped and emergency is not None:
+            # For an ended bot, Binance values remaining open assets at the
+            # stop price. We therefore stop order generation and retain the
+            # current grid profit; the final floating PnL is marked at stop.
+            stopped = True
+            stop_price = emergency
 
-        if not stopped: high_water = max(high_water, h)
-        unrealized = sum(x["qty"] * (c - x["unit_cost"]) for x in lots)
-        equity_curve.append(investment + realized_grid_profit + unrealized)
+        if not stopped:
+            high_water = max(high_water, h)
+
+        mark = stop_price if stopped and stop_price is not None else c
+        floating = floating_pnl(mark)
+        total_profit = grid_profit + floating
+        profit_curve.append(investment + total_profit)
 
     final_close = float(df.iloc[-1].close)
-    final_unrealized = sum(x["qty"] * (final_close - x["unit_cost"]) for x in lots)
-    total_pnl = realized_grid_profit + final_unrealized
+    mark = stop_price if stopped and stop_price is not None else final_close
+    final_floating = floating_pnl(mark)
+    total_pnl = grid_profit + final_floating
     roi = total_pnl / investment * 100 if investment else 0.0
 
-    eqs = pd.Series(equity_curve, dtype="float64")
+    eqs = pd.Series(profit_curve, dtype="float64")
     peak = eqs.cummax()
     mdd = float(((peak - eqs) / peak).max()) * 100 if len(eqs) else 0.0
     bars_7d = max(1, int(round(7 * 24 * 60 / interval_minutes(interval))))
@@ -143,14 +195,26 @@ def simulate(df, cfg, path_mode="ohlc", interval="1m"):
     mdd7d = float(((rolling_peak - eqs) / rolling_peak).fillna(0.0).max()) * 100 if len(eqs) else 0.0
 
     return {
-        "investment_usdt": investment, "initial_equity": initial_equity,
-        "final_equity": investment + total_pnl, "roi_pct": roi, "pnl_usdt": total_pnl,
-        "grid_profit_usdt": realized_grid_profit, "unrealized_pnl_usdt": final_unrealized,
-        "mdd_pct": mdd, "mdd7d_pct": mdd7d, "trades": trades, "fees_usdt": fees,
-        "path_mode": path_mode, "stopped": stopped, "stop_price": stop_price,
+        "investment_usdt": investment,
+        "qty_per_order": qty,
+        "initial_equity": investment,
+        "final_equity": investment + total_pnl,
+        "roi_pct": roi,
+        "pnl_usdt": total_pnl,
+        "grid_profit_usdt": grid_profit,
+        "unrealized_pnl_usdt": final_floating,
+        "mdd_pct": mdd,
+        "mdd7d_pct": mdd7d,
+        "trades": trades,
+        "matched_trades": matched,
+        "fees_usdt": fees,
+        "path_mode": path_mode,
+        "stopped": stopped,
+        "stop_price": stop_price,
         "data_start": pd.to_datetime(df.iloc[0].open_time, unit="ms", utc=True).isoformat(),
         "data_end": pd.to_datetime(df.iloc[-1].open_time, unit="ms", utc=True).isoformat(),
-        "start_close": px0, "end_close": final_close,
+        "start_close": px0,
+        "end_close": final_close,
     }
 
 def main():
