@@ -69,7 +69,9 @@ def simulate(df, cfg, path_mode="ohlc", interval="1m"):
     pending_buys = {i: 0 for i in range(n)}
     pending_sells = {i: 0 for i in range(1, n + 1)}
 
-    grid_profit = 0.0
+    matched_gross = 0.0
+    matched_sell_fees = 0.0
+    matched_buy_fee_base = 0.0
     fees = 0.0
     trades = 0
     matched = 0
@@ -97,7 +99,7 @@ def simulate(df, cfg, path_mode="ohlc", interval="1m"):
         trades += 1
 
     def sell(idx):
-        nonlocal fees, trades, grid_profit, matched
+        nonlocal fees, trades, matched_gross, matched_sell_fees, matched_buy_fee_base, matched
         if idx not in open_sells:
             return
         p = levels[idx]
@@ -109,11 +111,10 @@ def simulate(df, cfg, path_mode="ohlc", interval="1m"):
         lower = idx - 1
         if lower >= 0 and pending_buys.get(lower, 0) > 0:
             buy_p = levels[lower]
-            buy_fee = qty * buy_p * fee
-            # Binance converts a base-asset buy fee to quote asset using the
-            # current/stop price. During a running bot the matching sell price
-            # is the relevant quote conversion proxy.
-            grid_profit += qty * p - qty * buy_p - fee_amt - buy_fee
+            buy_fee_base = qty * fee
+            matched_gross += qty * (p - buy_p)
+            matched_sell_fees += fee_amt
+            matched_buy_fee_base += buy_fee_base
             pending_buys[lower] -= 1
             matched += 1
 
@@ -145,6 +146,7 @@ def simulate(df, cfg, path_mode="ohlc", interval="1m"):
         reserved_base_fee_value = sum(qty * fee * last_price for _ in open_sells)
         return open_buy_quote + open_sell_value + reserved_quote_fees + reserved_base_fee_value - investment
 
+    prev_close = None
     for _, r in df.iterrows():
         o, h, l, c = map(float, (r.open, r.high, r.low, r.close))
         prior_high = high_water
@@ -159,12 +161,22 @@ def simulate(df, cfg, path_mode="ohlc", interval="1m"):
             if l <= candidate:
                 emergency = candidate if emergency is None else min(emergency, candidate)
 
-        path = [o, h, l, c] if path_mode == "ohlc" else [o, l, h, c]
+        # The first historical candle is the bot-creation reference point:
+        # its intrabar path must not be replayed as if the bot existed before
+        # creation. From the second candle onward, include the real gap from
+        # the previous close to the new open, then traverse the candle.
+        if prev_close is None:
+            path = [c]
+        else:
+            path = ([prev_close, o, h, l, c]
+                    if path_mode == "ohlc"
+                    else [prev_close, o, l, h, c])
         prev = path[0]
         for target in path[1:]:
             if not stopped:
                 process(prev, target)
             prev = target
+        prev_close = c
 
         if not stopped and emergency is not None:
             # For an ended bot, Binance values remaining open assets at the
@@ -177,12 +189,22 @@ def simulate(df, cfg, path_mode="ohlc", interval="1m"):
             high_water = max(high_water, h)
 
         mark = stop_price if stopped and stop_price is not None else c
+        grid_profit = (
+            matched_gross
+            - matched_sell_fees
+            - matched_buy_fee_base * mark
+        )
         floating = floating_pnl(mark)
         total_profit = grid_profit + floating
         profit_curve.append(investment + total_profit)
 
     final_close = float(df.iloc[-1].close)
     mark = stop_price if stopped and stop_price is not None else final_close
+    grid_profit = (
+        matched_gross
+        - matched_sell_fees
+        - matched_buy_fee_base * mark
+    )
     final_floating = floating_pnl(mark)
     total_pnl = grid_profit + final_floating
     roi = total_pnl / investment * 100 if investment else 0.0
