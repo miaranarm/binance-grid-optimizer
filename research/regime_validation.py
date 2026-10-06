@@ -154,14 +154,22 @@ def main():
     end=int(time.time()*1000); start=end-a.days*86400000
     df=fetch_klines(cfg["market"].replace("/",""),a.interval,start,end)
     tests=[]
-    for width in (.08,.10,.12):
-      for grids in (8,12,16):
-       for cap in (.35,.50,.65):
+    # V2 risk-budget sweep: deliberately cash-dominant configurations.
+    # The previous run proved that 35-65% base-asset caps still produced
+    # double-digit full-history MDD. We now test whether strict exposure
+    # budgeting can reach the hard MDD <= 5% objective without using a blunt
+    # portfolio stop-loss.
+    for width in (.06,.08,.10):
+      for grids in (6,8):
+       for cap in (.10,.15,.20,.25,.30):
         for fast,slow in ((48,288),(96,288),(144,576)):
-         for vmax in (.60,.90):
-          tests.append({"range_pct":width,"grids":grids,"inventory_cap":cap,
-            "ema_fast":fast,"ema_slow":slow,"slope_bars":72,"slope_min":0.0,
-            "vol_span":288,"vol_max":vmax,"reset_hours":72,"cooldown_bars":144})
+         for vmax in (.30,.45,.60):
+          for slope_min in (0.0,0.001):
+           for cooldown in (144,288):
+            tests.append({"range_pct":width,"grids":grids,"inventory_cap":cap,
+              "ema_fast":fast,"ema_slow":slow,"slope_bars":72,"slope_min":slope_min,
+              "vol_span":288,"vol_max":vmax,"reset_hours":72,
+              "cooldown_bars":cooldown})
     rows=[]
     for t in tests:
       for path in ("ohlc","olhc"):
