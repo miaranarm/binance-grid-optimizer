@@ -9,11 +9,11 @@ on:
       days:
         description: "Historical days"
         required: false
-        default: "270"
+        default: "90"
       interval:
         description: "Binance candle interval"
         required: false
-        default: "1m"
+        default: "5m"
 
 permissions:
   contents: write
