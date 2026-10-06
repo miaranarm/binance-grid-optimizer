@@ -73,8 +73,10 @@ def simulate(df, cfg, path_mode):
         si = list(range(above, n+1))
         buy_capacity = sum(lv[j]*(1+fee) for j in bi)
         q_quote = quote/buy_capacity if buy_capacity > 0 else 0.0
-        q_base = base/len(si) if si else float("inf")
-        qty = min(q_quote, q_base)
+        # Buy size is determined by available quote. Existing base only limits
+        # how many sell orders can be placed; it must NOT reduce initial buy size
+        # to zero when the portfolio starts entirely in quote.
+        qty = q_quote
         if qty > 0:
             buys.update({j: lv[j] for j in bi})
             usable = min(len(si), int(base/qty + 1e-12))
