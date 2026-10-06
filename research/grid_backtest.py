@@ -51,11 +51,12 @@ def simulate(df, cfg, path_mode="ohlc", interval="1m"):
     n = int(cfg["grids"])
     px0 = float(df.iloc[0].close)
 
-    # At creation Binance places buy orders below the current price and sell
-    # orders above it. Solve Qty Per Order from the investment amount.
-    k = next((i for i in range(n) if levels[i] <= px0 < levels[i + 1]), n - 1)
-    buy_idx = list(range(0, k + 1))
-    sell_idx = list(range(k + 1, n + 1))
+    # At creation Binance places buys strictly below the current price and
+    # sells strictly above it. The grid level immediately around the current
+    # price remains empty. This matches Binance's documented startup layout.
+    first_above = next((i for i, p in enumerate(levels) if p > px0), n + 1)
+    buy_idx = list(range(0, min(first_above, n + 1)))
+    sell_idx = list(range(first_above, n + 1))
 
     buy_notional_factor = sum(levels[i] for i in buy_idx)
     sell_notional_factor = sum(px0 for _ in sell_idx)
