@@ -213,9 +213,13 @@ def simulate(df, cfg, path_mode="ohlc", interval="1m"):
     eqs = pd.Series(profit_curve, dtype="float64")
     peak = eqs.cummax()
     mdd = float(((peak - eqs) / peak).max()) * 100 if len(eqs) else 0.0
+    # Binance displays "7D MDD" as the maximum drawdown over the
+    # current 7-day performance window, not the worst rolling 7-day window
+    # encountered anywhere in the full history.
     bars_7d = max(1, int(round(7 * 24 * 60 / interval_minutes(interval))))
-    rolling_peak = eqs.rolling(bars_7d, min_periods=1).max()
-    mdd7d = float(((rolling_peak - eqs) / rolling_peak).fillna(0.0).max()) * 100 if len(eqs) else 0.0
+    recent = eqs.iloc[-bars_7d:]
+    recent_peak = recent.cummax()
+    mdd7d = float(((recent_peak - recent) / recent_peak).max()) * 100 if len(recent) else 0.0
 
     return {
         "investment_usdt": investment,
