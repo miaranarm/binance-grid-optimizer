@@ -1,0 +1,55 @@
+name: Grid Optimizer Dynamic Validation
+
+on:
+  push:
+    paths:
+      - "research/dynamic_validation.py"
+      - ".github/workflows/dynamic-validation.yml"
+      - "config/baseline_9161957.json"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Historical days"
+        required: false
+        default: "270"
+      interval:
+        description: "Binance candle interval"
+        required: false
+        default: "5m"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: grid-optimizer-dynamic-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install pandas requests
+      - name: Validate configuration
+        run: python -m json.tool config/baseline_9161957.json >/dev/null
+      - name: Run dynamic validation
+        run: |
+          sed -i "s#https://api.binance.com/api/v3/klines#https://data-api.binance.vision/api/v3/klines#" research/dynamic_validation.py
+          python research/dynamic_validation.py --days "${{ inputs.days || '270' }}" --interval "${{ inputs.interval || '5m' }}"
+      - name: Publish validation results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          cp results/dynamic_validation.csv /tmp/dynamic_validation.csv
+          git reset --hard HEAD
+          git clean -fd
+          git pull --rebase origin main
+          cp /tmp/dynamic_validation.csv results/dynamic_validation.csv
+          git add results/dynamic_validation.csv
+          git diff --cached --quiet || git commit -m "results: dynamic grid validation"
+          git push
