@@ -1,0 +1,43 @@
+name: Grid Optimizer Regime Validation
+
+on:
+  push:
+    paths:
+      - "research/regime_validation.py"
+      - ".github/workflows/regime-validation.yml"
+      - "config/baseline_9161957.json"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: grid-optimizer-regime-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pandas requests
+      - run: python -m json.tool config/baseline_9161957.json >/dev/null
+      - run: |
+          sed -i "s#https://api.binance.com/api/v3/klines#https://data-api.binance.vision/api/v3/klines#" research/regime_validation.py
+          python research/regime_validation.py --days 270 --interval 5m
+      - name: Publish result safely
+        run: |
+          cp results/regime_validation.csv /tmp/regime_validation.csv
+          git reset --hard HEAD
+          git clean -fd
+          git pull --rebase origin main
+          cp /tmp/regime_validation.csv results/regime_validation.csv
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add results/regime_validation.csv
+          git diff --cached --quiet || git commit -m "results: regime validation"
+          git push
