@@ -271,21 +271,27 @@ def main():
     end = int(time.time() * 1000); start = end - args.days * 86400000
     df = fetch_klines(cfg["market"].replace("/", ""), args.interval, start, end)
 
-    variants = [
-        ("B0_baseline", {}),
-        ("T3_trailing_3pct", {"trailing_stop": 0.03}),
-        ("T4_trailing_4pct", {"trailing_stop": 0.04}),
-        ("T5_trailing_5pct", {"trailing_stop": 0.05}),
-        ("T6_trailing_6pct", {"trailing_stop": 0.06}),
-        ("X2_range0140_0195_trail4", {"lower_price": 0.0140, "upper_price": 0.0195, "trailing_stop": 0.04}),
-        ("X3_range0140_0195_trail5", {"lower_price": 0.0140, "upper_price": 0.0195, "trailing_stop": 0.05}),
-        ("W2_range0145_0190_trail4", {"lower_price": 0.0145, "upper_price": 0.0190, "trailing_stop": 0.04}),
-        ("G1_20grids_trail4", {"grids": 20, "trailing_stop": 0.04}),
-        ("G2_24grids_trail4", {"grids": 24, "trailing_stop": 0.04}),
-        ("G3_32grids_trail4", {"grids": 32, "trailing_stop": 0.04}),
-        ("C1_capital_30_trail4", {"min_investment_usdt": 30.0, "trailing_stop": 0.04}),
-        ("C2_capital_45_trail4", {"min_investment_usdt": 45.0, "trailing_stop": 0.04}),
+    # Phase 2: systematic range/grid search.  We optimize the configuration
+    # itself, not the investment amount (investment scales PnL almost linearly).
+    # Binance's marketplace MDD field is a 7-day measure, so candidates are
+    # ranked primarily on ROI subject to mdd7d <= 5%, with total MDD retained
+    # as a secondary robustness diagnostic.
+    candidates = []
+    ranges = [
+        (0.0135, 0.0180), (0.0140, 0.0180), (0.0145, 0.0180),
+        (0.0150, 0.0180), (0.0155, 0.0180),
+        (0.0140, 0.0185), (0.0145, 0.0185), (0.0150, 0.0185),
+        (0.0140, 0.0190), (0.0145, 0.0190), (0.0150, 0.0190),
+        (0.0140, 0.0195), (0.0145, 0.0195), (0.0150, 0.0195),
+        (0.0140, 0.0200), (0.0145, 0.0200), (0.0150, 0.0200),
+        (0.0140, 0.0210), (0.0145, 0.0210), (0.0150, 0.0210),
     ]
+    for lo, hi in ranges:
+        for grids in (8, 12, 16, 20, 24, 32):
+            candidates.append((f"R{lo:.4f}_{hi:.4f}_G{grids}", {
+                "lower_price": lo, "upper_price": hi, "grids": grids
+            }))
+    variants = [("B0_baseline", {})] + candidates
     rows = []
     for name, changes in variants:
         c = {**cfg, **changes}
@@ -299,7 +305,18 @@ def main():
     out = pd.DataFrame(rows)
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(args.output, index=False)
-    print(out.to_string(index=False))
+
+    # Keep one conservative execution path for the optimization ranking.
+    rank = out[out["path_mode"] == "ohlc"].copy()
+    rank["passes_mdd7d_5pct"] = rank["mdd7d_pct"] <= 5.0
+    rank["score"] = rank["roi_pct"] - 0.50 * rank["mdd7d_pct"] - 0.05 * rank["mdd_pct"]
+    rank = rank.sort_values(
+        ["passes_mdd7d_5pct", "score", "roi_pct"],
+        ascending=[False, False, False],
+    )
+    rank.to_csv("results/grid_optimizer_ranked.csv", index=False)
+    print("\nTOP 20 CANDIDATES (OHLC, MDD7D <= 5% preferred):")
+    print(rank.head(20).to_string(index=False))
 
 if __name__ == "__main__":
     main()
