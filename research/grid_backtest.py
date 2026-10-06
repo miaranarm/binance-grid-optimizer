@@ -173,9 +173,26 @@ def simulate(df, cfg, path_mode="ohlc", interval="1m"):
                     if path_mode == "ohlc"
                     else [prev_close, o, l, h, c])
         prev = path[0]
-        for target in path[1:]:
+        if path_mode in ("ohlc", "olhc"):
+            segments = list(zip(path[:-1], path[1:]))
+        elif path_mode == "close_only":
+            segments = [(prev_close, c)] if prev_close is not None else []
+        elif path_mode == "one_direction":
+            segments = list(zip(path[:-1], path[1:]))
+        else:
+            raise ValueError(f"Unsupported path_mode: {path_mode}")
+        candle_direction = None
+        for seg_prev, target in segments:
             if not stopped:
-                process(prev, target)
+                if path_mode != "one_direction":
+                    process(seg_prev, target)
+                else:
+                    direction = "up" if target > seg_prev else "down"
+                    if candle_direction is None:
+                        candle_direction = direction
+                        process(seg_prev, target)
+                    elif direction == candle_direction:
+                        process(seg_prev, target)
             prev = target
         prev_close = c
 
@@ -272,7 +289,10 @@ def main():
     rows = []
     for name, changes in variants:
         c = {**cfg, **changes}
-        for path_mode in ("ohlc", "olhc"):
+        modes = ("ohlc", "olhc")
+        if name == "B0_baseline":
+            modes = ("ohlc", "olhc", "one_direction", "close_only")
+        for path_mode in modes:
             x = simulate(df, c, path_mode, args.interval)
             x.update({"experiment": name, "days": args.days, "interval": args.interval})
             rows.append(x)
