@@ -1,6 +1,12 @@
 name: Grid Optimizer Long Validation
 
 on:
+  push:
+    paths:
+      - "research/long_validation.py"
+      - ".github/workflows/long-validation.yml"
+      - "research/grid_backtest.py"
+      - "config/baseline_9161957.json"
   workflow_dispatch:
     inputs:
       days:
