@@ -41,6 +41,13 @@ jobs:
           python research/grid_backtest.py --days "${{ inputs.days || '90' }}" --interval "${{ inputs.interval || '5m' }}"
       - name: Publish audit results
         run: |
+          cp results/binance_style_audit.csv /tmp/binance_style_audit.csv
+          cp results/grid_optimizer_ranked.csv /tmp/grid_optimizer_ranked.csv
+          git reset --hard HEAD
+          git clean -fd
+          git pull --rebase origin main
+          cp /tmp/binance_style_audit.csv results/binance_style_audit.csv
+          cp /tmp/grid_optimizer_ranked.csv results/grid_optimizer_ranked.csv
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add results/binance_style_audit.csv results/grid_optimizer_ranked.csv
