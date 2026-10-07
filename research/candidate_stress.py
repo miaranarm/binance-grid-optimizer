@@ -9,18 +9,23 @@ def main():
     ap.add_argument("--days",type=int,default=270)
     ap.add_argument("--output",default="results/candidate_stress.csv")
     a=ap.parse_args()
-    cfg=json.loads(Path("config/candidate_grid_risk_v1.json").read_text())
-    cfg["_days"]=a.days
+    base=json.loads(Path("config/candidate_grid_risk_v1.json").read_text())
+    base["_days"]=a.days
     import time
     end=int(time.time()*1000); start=end-a.days*86400000
-    df=rv.fetch_klines(cfg["market"].replace("/",""),"5m",start,end)
+    df=rv.fetch_klines(base["market"].replace("/",""),"5m",start,end)
     rows=[]
-    for slip in (0.0,0.0002,0.0005,0.0010):
-        for path in ("ohlc","olhc"):
-            x=rv.simulate(df,{**cfg,"_interval":"5m","slippage_rate":slip},path)
-            x["slippage_rate"]=slip
-            x["stress_case"]=f"{slip*100:.2f}%"
-            rows.append(x)
+    # Keep the validated architecture fixed; reduce inventory cap to test
+    # whether the 0.10% execution-stress failure can be removed.
+    for cap in (0.10,0.15,0.20):
+        for slip in (0.0005,0.0010):
+            for path in ("ohlc","olhc"):
+                cfg={**base,"inventory_cap":cap,"_interval":"5m","slippage_rate":slip}
+                x=rv.simulate(df,cfg,path)
+                x["inventory_cap"]=cap
+                x["slippage_rate"]=slip
+                x["stress_case"]=f"cap={cap:.2f},slip={slip*100:.2f}%"
+                rows.append(x)
     out=pd.DataFrame(rows).sort_values(
         ["passes_mdd_5pct","mdd_pct","roi_pct"],
         ascending=[False,True,False]
