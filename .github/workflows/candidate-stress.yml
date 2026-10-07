@@ -3,6 +3,7 @@ on:
   push:
     paths:
       - "config/candidate_grid_risk_v1.json"
+      - "config/candidate_grid_risk_v2.json"
       - "research/regime_validation.py"
       - "research/candidate_stress.py"
       - ".github/workflows/candidate-stress.yml"
@@ -23,7 +24,7 @@ jobs:
           sed -i "s#https://api.binance.com/api/v3/klines#https://data-api.binance.vision/api/v3/klines#" research/regime_validation.py
           python research/candidate_stress.py --days 270
       - run: |
-          cp results/candidate_stress.csv /tmp/candidate_stress.csv
+          cp results/candidate_stress_v2.csv /tmp/candidate_stress.csv
           git reset --hard HEAD
           git clean -fd
           git pull --rebase origin main
