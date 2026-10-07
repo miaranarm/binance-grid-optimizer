@@ -13,7 +13,7 @@ def tests():
          for vm in (.45,.60):
           for sm in (0.0,0.001):
            for cd in (72,144):
-            for ex in (.05,.10,.15,.20):
+            for ex in (.05,.06,.07,.08,.09,.10,.12,.15,.20):
              out.append({"range_pct":w,"grids":g,"inventory_cap":cap,"ema_fast":fs,"ema_slow":ss,
               "slope_bars":72,"slope_min":sm,"vol_span":288,"vol_max":vm,
               "reset_hours":72,"cooldown_bars":cd,"exposure_fraction":ex})
