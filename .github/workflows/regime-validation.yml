@@ -11,14 +11,10 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: grid-optimizer-regime-validation
-  cancel-in-progress: true
-
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -26,9 +22,10 @@ jobs:
           python-version: "3.11"
       - run: pip install pandas requests
       - run: python -m json.tool config/baseline_9161957.json >/dev/null
-      - run: |
+      - name: Staged validation
+        run: |
           sed -i "s#https://api.binance.com/api/v3/klines#https://data-api.binance.vision/api/v3/klines#" research/regime_validation.py
-          python research/regime_validation.py --days 270 --interval 5m
+          python research/regime_validation.py --days 270 --interval 5m --staged --top-n 40
       - name: Publish result safely
         run: |
           cp results/regime_validation.csv /tmp/regime_validation.csv
@@ -39,5 +36,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add results/regime_validation.csv
-          git diff --cached --quiet || git commit -m "results: regime validation"
+          git diff --cached --quiet || git commit -m "results: staged regime validation"
           git push
