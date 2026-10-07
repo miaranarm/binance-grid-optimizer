@@ -1,0 +1,20 @@
+{
+  "candidate_id":"grid-risk-v2",
+  "market":"TST/USDT",
+  "strategy":"regime_inventory_grid",
+  "min_investment_usdt":45.0,
+  "range_pct":0.08,
+  "grids":8,
+  "inventory_cap":0.10,
+  "ema_fast":144,
+  "ema_slow":576,
+  "slope_bars":72,
+  "slope_min":0.001,
+  "vol_span":288,
+  "vol_max":0.45,
+  "reset_hours":72,
+  "cooldown_bars":72,
+  "exposure_fraction":0.20,
+  "fee_rate":0.001,
+  "notes":"Walk-forward survivor: highest tested exposure with passes_all_unseen=true. Requires execution stress validation before live use."
+}
