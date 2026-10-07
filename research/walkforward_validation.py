@@ -41,7 +41,19 @@ def main():
     train_rows=train_rows.sort_values(
         ["passes_mdd_5pct","score","roi_pct"],ascending=[False,False,False]
     )
-    cand=train_rows.drop_duplicates("experiment").head(a.top_n)
+    # Preserve exposure diversity: the global ranking otherwise selects only
+    # the safest 5% exposure because it dominates the coarse MDD filter.
+    # First keep the best coarse candidate for each exposure level, then fill
+    # the remaining slots with the best global candidates.
+    by_exposure = (
+        train_rows.sort_values(
+            ["passes_mdd_5pct","score","roi_pct"],
+            ascending=[False,False,False]
+        )
+        .drop_duplicates("exposure_fraction")
+    )
+    rest = train_rows[~train_rows["experiment"].isin(by_exposure["experiment"])]
+    cand = pd.concat([by_exposure, rest], ignore_index=True).drop_duplicates("experiment").head(a.top_n)
     selected=[next(t for t in alltests if str(t)==s) for s in cand["experiment"]]
 
     # Map the same chronological thirds onto the full 5m dataset.
