@@ -1,5 +1,5 @@
 from __future__ import annotations
-import argparse,json,time
+import argparse,json,time,ast
 from pathlib import Path
 import pandas as pd
 import regime_validation as rv
@@ -45,14 +45,15 @@ def main():
     # the safest 5% exposure because it dominates the coarse MDD filter.
     # First keep the best coarse candidate for each exposure level, then fill
     # the remaining slots with the best global candidates.
-    by_exposure = (
-        train_rows.sort_values(
-            ["passes_mdd_5pct","score","roi_pct"],
-            ascending=[False,False,False]
-        )
-        .drop_duplicates("exposure_fraction")
+    ranked_train = train_rows.sort_values(
+        ["passes_mdd_5pct","score","roi_pct"],
+        ascending=[False,False,False]
+    ).copy()
+    ranked_train["exposure_fraction"] = ranked_train["experiment"].map(
+        lambda s: ast.literal_eval(s)["exposure_fraction"]
     )
-    rest = train_rows[~train_rows["experiment"].isin(by_exposure["experiment"])]
+    by_exposure = ranked_train.drop_duplicates("exposure_fraction")
+    rest = ranked_train[~ranked_train["experiment"].isin(by_exposure["experiment"])]
     cand = pd.concat([by_exposure, rest], ignore_index=True).drop_duplicates("experiment").head(a.top_n)
     selected=[next(t for t in alltests if str(t)==s) for s in cand["experiment"]]
 
