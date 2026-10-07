@@ -90,12 +90,10 @@ def simulate(df, cfg, path_mode):
         si = list(range(above, n+1))
         buy_capacity = sum(lv[j]*(1+fee) for j in bi)
         q_quote = quote/buy_capacity if buy_capacity > 0 else 0.0
-        # Size each order so a single fill cannot exceed the inventory
-        # budget. This makes low inventory caps actionable instead of
-        # blocking every order when the grid has only a few buy levels.
-        min_level = min(lv[j] for j in bi) if bi else float("inf")
-        cap_qty = (cap * investment) / (min_level * (1.0 + fee)) if math.isfinite(min_level) else 0.0
-        qty = min(q_quote * exposure, cap_qty)
+        # Keep the base order size tied to available quote. The inventory
+        # cap is enforced dynamically at execution time, so partial fills
+        # remain possible even with a tight cap.
+        qty = q_quote * exposure
         if qty > 0:
             buys.update({j: lv[j] for j in bi})
             usable = min(len(si), int(base/qty + 1e-12))
@@ -115,22 +113,28 @@ def simulate(df, cfg, path_mode):
         if j not in buys or qty <= 0:
             return
         exec_price = price*(1.0+slippage)
-        cost = exec_price*qty; f = cost*fee
         equity = quote + base*price
-        if quote + 1e-12 < cost+f or base*price+cost > cap*max(equity,1e-12):
+        max_value = cap*max(equity,1e-12) - base*price
+        max_qty = max_value/(exec_price*(1.0+fee)) if max_value > 0 else 0.0
+        fill_qty = min(qty, max_qty)
+        if fill_qty <= 1e-12:
             return
-        quote -= cost+f; base += qty; fees += f; trades += 1
+        cost = exec_price*fill_qty; f = cost*fee
+        if quote + 1e-12 < cost+f:
+            return
+        quote -= cost+f; base += fill_qty; fees += f; trades += 1
         del buys[j]
         if j+1 <= n:
             sells[j+1] = lv[j+1]
 
     def sell(j, price):
         nonlocal quote, base, fees, trades
-        if j not in sells or qty <= 0 or base + 1e-12 < qty:
+        if j not in sells or qty <= 0 or base <= 1e-12:
             return
         exec_price = price*(1.0-slippage)
-        gross=exec_price*qty; f=gross*fee
-        base-=qty; quote+=gross-f; fees+=f; trades+=1
+        fill_qty = min(qty, base)
+        gross=exec_price*fill_qty; f=gross*fee
+        base-=fill_qty; quote+=gross-f; fees+=f; trades+=1
         del sells[j]
         if j-1 >= 0:
             buys[j-1]=lv[j-1]
