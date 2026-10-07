@@ -47,6 +47,7 @@ def simulate(df, cfg, path_mode):
     n = int(cfg["grids"]); width = float(cfg["range_pct"])
     reset_hours = int(cfg["reset_hours"]); cooldown_bars = int(cfg["cooldown_bars"])
     cap = float(cfg["inventory_cap"])
+    exposure = float(cfg.get("exposure_fraction", 1.0))
     fast_span = int(cfg["ema_fast"]); slow_span = int(cfg["ema_slow"])
     slope_bars = int(cfg["slope_bars"]); slope_min = float(cfg["slope_min"])
     vol_span = int(cfg["vol_span"]); vol_max = float(cfg["vol_max"])
@@ -86,7 +87,7 @@ def simulate(df, cfg, path_mode):
         si = list(range(above, n+1))
         buy_capacity = sum(lv[j]*(1+fee) for j in bi)
         q_quote = quote/buy_capacity if buy_capacity > 0 else 0.0
-        qty = q_quote
+        qty = q_quote * exposure
         if qty > 0:
             buys.update({j: lv[j] for j in bi})
             usable = min(len(si), int(base/qty + 1e-12))
