@@ -46,6 +46,7 @@ def simulate(df, cfg, path_mode):
     df = df.reset_index(drop=True)
     investment = float(cfg["min_investment_usdt"])
     fee = float(cfg.get("fee_rate", 0.001))
+    slippage = float(cfg.get("slippage_rate", 0.0))
     n = int(cfg["grids"]); width = float(cfg["range_pct"])
     reset_hours = int(cfg["reset_hours"]); cooldown_bars = int(cfg["cooldown_bars"])
     cap = float(cfg["inventory_cap"])
@@ -99,7 +100,7 @@ def simulate(df, cfg, path_mode):
     def liquidate(price):
         nonlocal quote, base, fees, trades, liquidations
         if base > 0:
-            gross = base*price; f = gross*fee
+            gross = base*price*(1.0-slippage); f = gross*fee
             quote += gross-f; fees += f; trades += 1
             base = 0.0; liquidations += 1
         clear_orders()
@@ -108,7 +109,8 @@ def simulate(df, cfg, path_mode):
         nonlocal quote, base, fees, trades
         if j not in buys or qty <= 0:
             return
-        cost = price*qty; f = cost*fee
+        exec_price = price*(1.0+slippage)
+        cost = exec_price*qty; f = cost*fee
         equity = quote + base*price
         if quote + 1e-12 < cost+f or base*price+cost > cap*max(equity,1e-12):
             return
@@ -121,7 +123,8 @@ def simulate(df, cfg, path_mode):
         nonlocal quote, base, fees, trades
         if j not in sells or qty <= 0 or base + 1e-12 < qty:
             return
-        gross=price*qty; f=gross*fee
+        exec_price = price*(1.0-slippage)
+        gross=exec_price*qty; f=gross*fee
         base-=qty; quote+=gross-f; fees+=f; trades+=1
         del sells[j]
         if j-1 >= 0:
