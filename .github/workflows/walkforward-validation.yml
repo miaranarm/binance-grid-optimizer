@@ -1,0 +1,34 @@
+name: Grid Optimizer Walk-Forward Validation
+on:
+  push:
+    paths:
+      - "research/walkforward_validation.py"
+      - "research/regime_validation.py"
+      - ".github/workflows/walkforward-validation.yml"
+      - "config/baseline_9161957.json"
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install pandas requests
+      - run: |
+          sed -i "s#https://api.binance.com/api/v3/klines#https://data-api.binance.vision/api/v3/klines#g" research/regime_validation.py
+          python research/walkforward_validation.py --days 270 --top-n 12
+      - run: |
+          cp results/walkforward_validation.csv /tmp/walkforward_validation.csv
+          git reset --hard HEAD
+          git clean -fd
+          git pull --rebase origin main
+          cp /tmp/walkforward_validation.csv results/walkforward_validation.csv
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add results/walkforward_validation.csv
+          git diff --cached --quiet || git commit -m "results: walk-forward validation"
+          git push
