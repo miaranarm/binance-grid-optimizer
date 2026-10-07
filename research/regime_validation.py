@@ -90,7 +90,12 @@ def simulate(df, cfg, path_mode):
         si = list(range(above, n+1))
         buy_capacity = sum(lv[j]*(1+fee) for j in bi)
         q_quote = quote/buy_capacity if buy_capacity > 0 else 0.0
-        qty = q_quote * exposure
+        # Size each order so a single fill cannot exceed the inventory
+        # budget. This makes low inventory caps actionable instead of
+        # blocking every order when the grid has only a few buy levels.
+        min_level = min(lv[j] for j in bi) if bi else float("inf")
+        cap_qty = (cap * investment) / (min_level * (1.0 + fee)) if math.isfinite(min_level) else 0.0
+        qty = min(q_quote * exposure, cap_qty)
         if qty > 0:
             buys.update({j: lv[j] for j in bi})
             usable = min(len(si), int(base/qty + 1e-12))
