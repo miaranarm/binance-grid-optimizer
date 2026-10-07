@@ -42,6 +42,8 @@ def interval_minutes(interval):
     raise ValueError(f"Unsupported interval: {interval}")
 
 def simulate(df, cfg, path_mode):
+    # Walk-forward folds retain original row labels; simulation uses positional iloc.
+    df = df.reset_index(drop=True)
     investment = float(cfg["min_investment_usdt"])
     fee = float(cfg.get("fee_rate", 0.001))
     n = int(cfg["grids"]); width = float(cfg["range_pct"])
